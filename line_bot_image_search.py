@@ -16,10 +16,11 @@ try:
 except ImportError:
    import xml.etree.ElementTree as ET
 
+#替換config.py中的token
 line_bot_api = LineBotApi(line_channel_access_token)
 handler = WebhookHandler(line_channel_secret)
 
-
+#建立資料庫
 conn = sqlite3.connect('line_bot_image_search.db')
 c = conn.cursor()
 c.execute("""CREATE TABLE if not exists "data" (
@@ -32,7 +33,7 @@ c.execute("""CREATE TABLE if not exists "data" (
 conn.commit()
 
 
-
+#建立路由
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -43,6 +44,7 @@ def callback():
         abort(400)
     return 'OK'
 
+#針對加入群組的事件做處理
 @handler.add(JoinEvent, )
 def handle_join(event):
     print(event)
@@ -50,6 +52,7 @@ def handle_join(event):
     c = conn.cursor()
     res = "NULL"
     
+    #判斷群組是否已存在資料庫中，以對資料庫進行資料的新增
     if event.source.type == "group":
         c.execute('SELECT id, type, state, url FROM data WHERE id=?', [event.source.group_id])
         cursor = c.fetchone()
@@ -65,6 +68,7 @@ def handle_join(event):
     conn.commit()
     conn.close()
 
+#針對收到訊息的事件做處理
 @handler.add(MessageEvent, message=(ImageMessage, TextMessage))
 def handle_message(event):
     print(event)
@@ -75,9 +79,8 @@ def handle_message(event):
     if event.source.type == "group":
         c.execute('SELECT id, type, state, url FROM data WHERE id=?', [event.source.group_id])
         cursor = c.fetchone()
-        #conn.commit()
-        print(cursor)
 
+        #如果資料庫中沒有該群組的資料，新增一筆
         if cursor == None or cursor == []:
             try:                
                 c.execute("INSERT INTO data (id, type, state, url) VALUES (?,?,?,?)", [event.source.group_id, "group", "activate", "no url"])
@@ -88,7 +91,8 @@ def handle_message(event):
                 res = "加入新群組!\n\n指令：\n!主動模式\n!被動模式\n!搜尋"
             except:
                 res = "重新回到群組!\n\n指令：\n!主動模式\n!被動模式\n!搜尋"
-   
+
+        #針對接收到的文字指令切換模式與搜尋圖片
         if isinstance(event.message, TextMessage):
             mtext = event.message.text
             if mtext == "!主動模式":
@@ -105,35 +109,28 @@ def handle_message(event):
                     res = "已為您上傳並搜尋群組中最後一張圖片\n以下為本次的搜尋結果\n" + url + \
                             "\n\n若想檢視原始圖片，請點擊下列網址\n" + cursor[3]
                 
-                
+    #針對接收到的圖片做處理           
     if isinstance(event.message, ImageMessage):
-        print("*1*")
+        #取得圖片並建立站存檔
         message_content = line_bot_api.get_message_content(event.message.id)
-        #with tempfile.NamedTemporaryFile(suffix='.jpg', mode="wb", delete=False) as tf:
-        #with tempfile.NamedTemporaryFile(prefix=ext + '-', delete=False) as tf:
         file_path = "/tmp/" + event.message.id + ".jpg"
-        #file_path = "a.jpg"
         with open(file_path, 'wb') as tf:
             for chunk in message_content.iter_content():
                 tf.write(chunk)
 
         print(file_path)
        
+        #設定Imgur api所需的資訊
         CLIENT_ID = client_id
         PATH = file_path #A Filepath to an image on your computer"
         title = "Uploaded with PyImgur"
 
-        print("*2*")
+        #透過Imgur api上傳圖片
         im = pyimgur.Imgur(CLIENT_ID)
         uploaded_image = im.upload_image(PATH, title=title)
 
-        print("*3*")
-        print(uploaded_image.title)
-        print(uploaded_image.link)
-        print(uploaded_image.type)
-        
-        url = "https://www.google.com/searchbyimage?&image_url=" + uploaded_image.link
-        print(cursor)
+        #透過google search by image api取得結果，判斷群組所設定的模式以設定訊息
+        url = "https://www.google.com/searchbyimage?&image_url=" + uploaded_image.link_big_square
         if event.source.type == "group" and cursor[2] == "passive":
             c.execute('UPDATE data SET url = ? where id = ?', [uploaded_image.link, event.source.group_id])
             print("passive")
